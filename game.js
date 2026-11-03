@@ -504,50 +504,127 @@ $('create').onclick=async()=>{
 };
 
 // GUEST: JOIN ROOM
- $('join').onclick=async()=>{
-  try{
-    $('error').textContent='';
+
+$('join').onclick = async () => {
+  try {
+    $('error').textContent = '';
     await connect();
 
-    const code=$('joincode').value.trim().toUpperCase();
+    const code = $('joincode').value.trim().toUpperCase();
 
-    if(!/^[A-Z2-9]{6}$/.test(code)){
+    if (!/^[A-Z2-9]{6}$/.test(code)) {
       throw Error('Enter a valid six-character room code.');
     }
 
-    const roomRef=ref(db,'rooms/'+code);
+    const roomRef = ref(db, 'rooms/' + code);
+    const snapshot = await get(roomRef);
 
-    // Confirm the room exists on Firebase.
-    const snapshot=await get(roomRef);
-
-    if(!snapshot.exists()){
-      throw Error(
-        'Room does not exist. Check the code and keep the host screen open.'
-      );
+    if (!snapshot.exists()) {
+      throw Error('Room not found. Ask the host for a new code.');
     }
 
-    const current=snapshot.val();
+    const data = snapshot.val();
 
-    if(!current.players?.[0]?.uid){
+    if (!data.players?.[0]?.uid) {
       throw Error('This room has no host.');
     }
 
-    if(Date.now()-current.created>86400000){
-      throw Error('This room has expired. Create a new room.');
+    if (Date.now() - data.created > 86400000) {
+      throw Error('Room expired. Create a new room.');
     }
 
-    if(
-      current.players?.[1] &&
-      !current.players.some(p=>p?.uid===uid)
-    ){
-      throw Error('This room already has two players.');
+    // Check if this browser is already a player.
+    const existingSeat = data.players.findIndex(
+      p => p?.uid === uid
+    );
+
+    if (existingSeat >= 0) {
+      seat = existingSeat;
+      history.replaceState(
+        null, '',
+        location.pathname + '?room=' + code
+      );
+      watch(code);
+      return;
     }
 
-    const player={
-      uid,
-      name:name(),
-      monster:chosen
+    // Reject rooms that already have two players.
+    if (data.players[1]) {
+      throw Error(
+        'This room already has two players. ' +
+        'Create a new room for another match.'
+      );
+    }
+
+    const playerRef = ref(
+      db,
+      'rooms/' + code + '/players/1'
+    );
+
+    const newPlayer = {
+      uid: uid,
+      name: name(),
+      monster: chosen
     };
+
+    // Claim only Player 2's slot.
+    const result = await runTransaction(
+      playerRef,
+      current => {
+        // Firebase may first provide an uncached null value.
+        // The server resolves any concurrent updates.
+        if (current === null) {
+          return newPlayer;
+        }
+
+        // Existing player can reconnect.
+        if (current.uid === uid) {
+          return current;
+        }
+
+        // Another player owns this slot.
+        return;
+      },
+      { applyLocally: false }
+    );
+
+    if (!result.committed) {
+      throw Error(
+        'Player 2 slot is occupied or the transaction was cancelled.'
+      );
+    }
+
+    const joinedPlayer = result.snapshot.val();
+
+    if (joinedPlayer?.uid !== uid) {
+      throw Error('Player identity verification failed.');
+    }
+
+    seat = 1;
+
+    history.replaceState(
+      null, '',
+      location.pathname + '?room=' + code
+    );
+
+    watch(code);
+
+  } catch (e) {
+    console.error('JOIN ERROR:', e.code, e.message);
+
+    if (
+      e.code === 'PERMISSION_DENIED' ||
+      e.code === 'database/permission-denied'
+    ) {
+      error(
+        'Firebase denied the join. Check database security rules.'
+      );
+    } else {
+      error(e);
+    }
+  }
+};
+
 
     // Add only player two. Preserve the existing board,
     // HP, turn, creation time, and other room data.
