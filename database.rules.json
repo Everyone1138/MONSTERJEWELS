@@ -1,0 +1,11 @@
+{
+  "rules": {
+    "rooms": {
+      "$room": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.child('players/0/uid').val() === auth.uid && !newData.child('players/1').exists()) || (data.exists() && (data.child('players/0/uid').val() === auth.uid || data.child('players/1/uid').val() === auth.uid || (!data.child('players/1').exists() && newData.child('players/1/uid').val() === auth.uid))))",
+        ".validate": "newData.hasChildren(['players','hp','turn','round','board','winner','last','created']) && newData.child('players').childrenCount <= 2 && newData.child('board').childrenCount == 49 && newData.child('hp/0').isNumber() && newData.child('hp/1').isNumber() && newData.child('hp/0').val() >= 0 && newData.child('hp/0').val() <= 100 && newData.child('hp/1').val() >= 0 && newData.child('hp/1').val() <= 100"
+      }
+    }
+  }
+}

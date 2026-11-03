@@ -1,0 +1,29 @@
+// Original, procedural 3D creatures. Three.js loads from a CDN; no build tools required.
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+import {MONSTERS} from './monsters.js';
+const slots=new Map();const clock=new THREE.Clock();
+const sphere=new THREE.SphereGeometry(1,24,16),cone=new THREE.ConeGeometry(1,1,12),box=new THREE.BoxGeometry(1,1,1);
+const mat=(color,roughness=.52)=>new THREE.MeshStandardMaterial({color,roughness,metalness:.04});
+function part(parent,geo,material,pos,scale,rot){const m=new THREE.Mesh(geo,material);m.position.set(...pos);m.scale.set(...scale);if(rot)m.rotation.set(...rot);m.castShadow=true;m.receiveShadow=true;parent.add(m);return m}
+function ball(p,m,pos,scale){return part(p,sphere,m,pos,scale)}
+function spike(p,m,pos,scale,rotation=0){return part(p,cone,m,pos,scale,[0,0,rotation])}
+function build(index){const data=MONSTERS[index],main=mat(data.primary),light=mat(data.accent),dark=mat('#28324b'),white=mat('#ffffff',.23),iris=mat('#19203b',.18),pink=mat('#ff9db4');const g=new THREE.Group();
+ball(g,main,[0,.05,0],[.82,.86,.65]);ball(g,light,[0,-.23,.49],[.57,.48,.24]);ball(g,main,[0,.85,.07],[.78,.68,.69]);
+for(const x of [-1,1]){ball(g,main,[x*.48,-.66,.20],[.29,.34,.32]);ball(g,main,[x*.72,.04,.29],[.27,.44,.29]);ball(g,white,[x*.31,.94,.60],[.245,.29,.13]);ball(g,iris,[x*.30, .94,.715],[.13,.19,.07]);ball(g,white,[x*.30-.045,1.035,.78],[.047,.065,.022]);ball(g,pink,[x*.57,.62,.59],[.19,.11,.055]);}
+ball(g,dark,[0,.62,.73],[.13,.085,.06]);ball(g,dark,[0,.43,.67],[.20,.055,.035]);
+const kind=data.kind;
+if(['dragon','serpent','golem','ram'].includes(kind)){for(const x of [-1,1]){const horn=spike(g,light,[x*.55,1.42,.02],[.19,.51,.20],-x*.35);horn.rotation.z=-x*.35}}
+if(['cat','wolf','fox','bat'].includes(kind)){for(const x of [-1,1]){const ear=spike(g,main,[x*.57,1.40,.01],[.35,.62,.22],-x*.28);ear.rotation.z=-x*.28;spike(g,pink,[x*.57,1.43,.18],[.17,.35,.05],-x*.28)}}
+if(kind==='turtle'){ball(g,dark,[0,.12,-.43],[.88,.72,.48]);ball(g,light,[0,.15,-.74],[.68,.55,.13]);for(let i=-1;i<=1;i++)spike(g,light,[i*.34,.65,-.6],[.15,.30,.15])}
+if(['dragon','phoenix','bat'].includes(kind)){for(const x of [-1,1]){const wing=part(g,new THREE.SphereGeometry(1,14,10),light,[x*1.01,.42,-.42],[.68,.15,.80]);wing.rotation.z=x*.45;wing.rotation.y=x*.4}}
+if(kind==='phoenix'){for(let i=-1;i<=1;i++)spike(g,light,[i*.24,1.48,-.05],[.15,.50+Math.abs(i)*-.12,.14],i*.25)}
+if(kind==='golem'){for(const x of [-1,1])ball(g,dark,[x*.82,.1,0],[.38,.43,.42]);ball(g,light,[0,.05,.59],[.25,.31,.10])}
+if(kind==='serpent'){for(let i=0;i<4;i++)ball(g,light,[.55+i*.20,-.52-i*.07,-.24-i*.25],[.29-i*.04,.24-i*.03,.26-i*.02])}
+if(['fox','cat','wolf'].includes(kind)){for(let i=0;i<3;i++)ball(g,light,[.65+i*.16,-.43+i*.19,-.42-i*.17],[.31-i*.05,.22,.27])}
+if(kind==='ram'){for(const x of [-1,1])ball(g,light,[x*.77,1.20,-.1],[.31,.34,.30])}
+if(kind==='bat'){for(const x of [-1,1])spike(g,white,[x*.14,.35,.67],[.055,.14,.055],Math.PI)}
+return g}
+function setup(el,index,side){const w=Math.max(130,el.clientWidth),h=Math.max(120,el.clientHeight);const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true,powerPreference:'low-power'});renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.6));renderer.setSize(w,h);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.5;el.replaceChildren(renderer.domElement);const scene=new THREE.Scene();const camera=new THREE.PerspectiveCamera(36,w/h,.1,100);camera.position.set(0,1.0,6.5);camera.lookAt(0,.30,0);scene.add(new THREE.HemisphereLight('#d7f1ff','#73598a',2.5));const key=new THREE.DirectionalLight('#ffffff',3.1);key.position.set(-3,6,5);scene.add(key);const rim=new THREE.PointLight(MONSTERS[index].primary,16,8);rim.position.set(2,2,-2);scene.add(rim);const creature=build(index);creature.rotation.y=side?-.18:.18;scene.add(creature);const floor=part(scene,new THREE.CylinderGeometry(1.18,1.32,.16,40),mat('#32375d'),[0,-1.04,0],[1,1,.75]);const ring=part(scene,new THREE.TorusGeometry(1.03,.035,8,48),new THREE.MeshBasicMaterial({color:MONSTERS[index].accent}),[0,-.94,0],[1,1,.75],[-Math.PI/2,0,0]);return {el,renderer,scene,camera,creature,ring,side,attack:0,hit:0,base:side?-.18:.18}}
+export async function mountMonster(el,index,side){const old=slots.get(side);if(old){old.renderer.dispose();old.renderer.domElement.remove();slots.delete(side)}const entry=setup(el,index,side);slots.set(side,entry);const status=document.getElementById('renderstatus');if(status)status.textContent='✨ Real-time 3D creatures • Tap gems to charge attacks';}
+export function playMonsterAttack(side){const e=slots.get(side),other=slots.get(1-side);if(e)e.attack=performance.now();if(other)other.hit=performance.now()+230}
+function frame(){requestAnimationFrame(frame);const t=clock.getElapsedTime(),now=performance.now();for(const e of slots.values()){if(!e.el.isConnected||e.el.offsetParent===null)continue;const w=e.el.clientWidth,h=e.el.clientHeight;if(w>0&&h>0&&(e.renderer.domElement.width!==Math.floor(w*e.renderer.getPixelRatio())||e.renderer.domElement.height!==Math.floor(h*e.renderer.getPixelRatio()))){e.renderer.setSize(w,h,false);e.camera.aspect=w/h;e.camera.updateProjectionMatrix()}let jump=0,lean=0;if(e.attack&&now-e.attack<720){const phase=(now-e.attack)/720;jump=Math.sin(Math.PI*phase)*.65;lean=Math.sin(Math.PI*phase)*.5}else if(e.attack&&now-e.attack>=720)e.attack=0;if(e.hit&&now-e.hit>=0&&now-e.hit<480){lean+=Math.sin((now-e.hit)/20)*.18}else if(e.hit&&now-e.hit>=480)e.hit=0;e.creature.position.y=Math.sin(t*2.4+e.side)*.07+jump;e.creature.rotation.y=e.base+Math.sin(t*.8+e.side)*.12+lean;e.creature.rotation.z=Math.sin(t*1.4+e.side)*.035+lean*.3;e.ring.rotation.z=t*.15;e.renderer.render(e.scene,e.camera)}}frame();
