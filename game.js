@@ -504,7 +504,7 @@ $('create').onclick=async()=>{
 };
 
 // GUEST: JOIN ROOM
-$('join').onclick=async()=>{
+ $('join').onclick=async()=>{
   try{
     $('error').textContent='';
     await connect();
@@ -551,26 +551,30 @@ $('join').onclick=async()=>{
 
     // Add only player two. Preserve the existing board,
     // HP, turn, creation time, and other room data.
-    const result=await runTransaction(
-      roomRef,
-      s=>{
-        if(!s||!s.players?.[0]?.uid)return;
+const playerRef = ref(db, 'rooms/' + code + '/players/1');
 
-        // Already a member: no update needed.
-        if(s.players.some(p=>p?.uid===uid))return;
+const result = await runTransaction(
+  playerRef,
+  currentPlayer => {
+    if (currentPlayer) {
+      if (currentPlayer.uid === uid) {
+        return currentPlayer;
+      }
+      return;
+    }
 
-        if(s.players[1]||Date.now()-s.created>86400000){
-          return;
-        }
+    return {
+      uid,
+      name: name(),
+      monster: chosen
+    };
+  },
+  { applyLocally: false }
+);
 
-        return {
-          ...s,
-          players:[s.players[0],player],
-          last:'Both players connected! Battle begins!'
-        };
-      },
-      {applyLocally:false}
-    );
+if (!result.committed) {
+  throw Error('Room is already full or joining was rejected.');
+}
 
     // A previously joined player may not need a write.
     const finalSnap=result.committed
