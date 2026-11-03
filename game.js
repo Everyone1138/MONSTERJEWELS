@@ -1,7 +1,12 @@
+
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import {
-  getDatabase, ref, get, onValue, runTransaction
+  getDatabase,
+  ref,
+  get,
+  onValue,
+  runTransaction
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js';
 
 import { MONSTERS, monsterSVG } from './monsters.js';
@@ -11,13 +16,23 @@ const $ = id => document.getElementById(id);
 
 const icons = ['🔥', '💧', '⚡', '🔮', '🍀'];
 const colors = ['#ff6c63', '#5dcdf8', '#ffdc61', '#bb91ff', '#71e7a1'];
+const colorNames = ['RED', 'BLUE', 'YELLOW', 'PURPLE', 'GREEN'];
+
 const COST = 9;
+const SIZE = 7;
+const ROOM_LIFETIME = 86400000;
 
 let db, auth, uid;
-let room = '', seat = -1, state = null;
+let room = '';
+let seat = -1;
+let state = null;
 let unsubscribe = null;
-let selected = -1, demo = false, busy = false;
-let chosen = 0, lastFx = '', botTimer = null;
+let selected = -1;
+let demo = false;
+let busy = false;
+let chosen = 0;
+let lastFx = '';
+let botTimer = null;
 let renderedMonsters = [-1, -1];
 
 const configured = !!(
@@ -41,46 +56,73 @@ function rand(n) {
   return Math.floor(Math.random() * n);
 }
 
-function matches(b) {
-  const out = new Set();
+// Deterministic random generator for synchronized battles.
+// The same board and seed produce the same refill gems.
+function nextRandom(seed) {
+  const next = (Math.imul(seed >>> 0, 1664525) + 1013904223) >>> 0;
+  return { seed: next, value: next % 5 };
+}
 
-  for (let r = 0; r < 7; r++) {
-    for (let c = 0; c < 7; c++) {
-      const i = r * 7 + c;
+function scanMatches(board) {
+  const cells = new Set();
+  let longest = 0;
+
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      const color = board[r * SIZE + c];
+
+      if (color === null || color === undefined) continue;
 
       for (const [dr, dc] of [[0, 1], [1, 0]]) {
-        const run = [i];
-        let rr = r + dr, cc = c + dc;
+        const previousR = r - dr;
+        const previousC = c - dc;
+
+        if (
+          previousR >= 0 && previousR < SIZE &&
+          previousC >= 0 && previousC < SIZE &&
+          board[previousR * SIZE + previousC] === color
+        ) continue;
+
+        const run = [];
+        let rr = r;
+        let cc = c;
 
         while (
-          rr < 7 &&
-          cc < 7 &&
-          b[rr * 7 + cc] === b[i]
+          rr >= 0 && rr < SIZE &&
+          cc >= 0 && cc < SIZE &&
+          board[rr * SIZE + cc] === color
         ) {
-          run.push(rr * 7 + cc);
+          run.push(rr * SIZE + cc);
           rr += dr;
           cc += dc;
         }
 
         if (run.length >= 3) {
-          run.forEach(x => out.add(x));
+          run.forEach(i => cells.add(i));
+          longest = Math.max(longest, run.length);
         }
       }
     }
   }
 
-  return [...out];
+  return { cells: [...cells], longest };
 }
 
-function hasMove(b) {
+function matches(board) {
+  return scanMatches(board).cells;
+}
+
+function hasMove(board) {
   for (let i = 0; i < 49; i++) {
-    for (const j of [i + 1, i + 7]) {
-      if (j >= 49 || (j === i + 1 && i % 7 === 6)) continue;
+    for (const j of [i + 1, i + SIZE]) {
+      if (j >= 49 || (j === i + 1 && i % SIZE === SIZE - 1)) {
+        continue;
+      }
 
-      const a = [...b];
-      [a[i], a[j]] = [a[j], a[i]];
+      const copy = [...board];
+      [copy[i], copy[j]] = [copy[j], copy[i]];
 
-      if (matches(a).length) return true;
+      if (matches(copy).length) return true;
     }
   }
 
@@ -88,13 +130,45 @@ function hasMove(b) {
 }
 
 function makeBoard() {
-  let b;
+  let board;
 
   do {
-    b = Array.from({ length: 49 }, () => rand(5));
-  } while (matches(b).length || !hasMove(b));
+    board = Array.from({ length: 49 }, () => rand(5));
+  } while (matches(board).length || !hasMove(board));
 
-  return b;
+  return board;
+}
+
+function applyGravity(board, removed, seed) {
+  const empty = new Set(removed);
+
+  for (let col = 0; col < SIZE; col++) {
+    const remaining = [];
+
+    for (let row = SIZE - 1; row >= 0; row--) {
+      const index = row * SIZE + col;
+
+      if (!empty.has(index)) {
+        remaining.push(board[index]);
+      }
+    }
+
+    let row = SIZE - 1;
+
+    for (const gem of remaining) {
+      board[row * SIZE + col] = gem;
+      row--;
+    }
+
+    while (row >= 0) {
+      const random = nextRandom(seed);
+      seed = random.seed;
+      board[row * SIZE + col] = random.value;
+      row--;
+    }
+  }
+
+  return seed;
 }
 
 function initial(p1, p2) {
@@ -103,8 +177,10 @@ function initial(p1, p2) {
     hp: [100, 100],
     energy: [0, 0],
     turn: 0,
+    movesLeft: 2,
     round: 1,
     board: makeBoard(),
+    seed: Math.floor(Math.random() * 4294967295),
     winner: -1,
     last: 'Battle begins! Match your monster element to charge an attack.',
     attack: null,
@@ -116,61 +192,90 @@ function updateMove(s, a, b, who) {
   if (
     s.winner !== -1 ||
     s.turn !== who ||
+    !s.players?.[1] ||
     !Number.isInteger(a) ||
     !Number.isInteger(b) ||
     a < 0 || b < 0 || a >= 49 || b >= 49
   ) return null;
 
-  if (!(
-    Math.abs(a - b) === 7 ||
+  const adjacent =
+    Math.abs(a - b) === SIZE ||
     (
       Math.abs(a - b) === 1 &&
-      Math.floor(a / 7) === Math.floor(b / 7)
-    )
-  )) return null;
+      Math.floor(a / SIZE) === Math.floor(b / SIZE)
+    );
+
+  if (!adjacent) return null;
 
   const board = [...s.board];
   [board[a], board[b]] = [board[b], board[a]];
 
-  const found = matches(board);
-  if (!found.length) return null;
+  const firstMatch = scanMatches(board);
+
+  if (!firstMatch.cells.length) return null;
 
   const element = MONSTERS[s.players[who].monster ?? 0].element;
-  const gained = found.filter(i => board[i] === element).length;
 
   const next = {
     ...s,
     board,
     hp: [...s.hp],
     energy: [...(s.energy || [0, 0])],
-    round: s.round + 1,
+    movesLeft: s.movesLeft ?? 2,
+    seed: s.seed ?? 123456789,
     attack: null
   };
 
-  next.energy[who] += gained;
+  let totalMatched = 0;
+  let energyGained = 0;
+  let cascades = 0;
+  const bonusMoves = firstMatch.longest >= 4 ? 1 : 0;
 
-  for (const i of found) {
-    next.board[i] = rand(5);
-  }
+  let current = firstMatch;
 
-  let loops = 0;
+  while (current.cells.length && cascades < 30) {
+    cascades++;
+    totalMatched += current.cells.length;
 
-  while (matches(next.board).length && loops++ < 30) {
-    for (const i of matches(next.board)) {
-      next.board[i] = rand(5);
+    for (const index of current.cells) {
+      if (next.board[index] === element) {
+        energyGained++;
+      }
     }
+
+    next.seed = applyGravity(
+      next.board,
+      current.cells,
+      next.seed
+    );
+
+    current = scanMatches(next.board);
   }
 
-  if (!hasMove(next.board)) {
+  // Extremely rare cascade safety fallback.
+  if (current.cells.length || !hasMove(next.board)) {
     next.board = makeBoard();
   }
 
-  next.last = `${s.players[who].name} matched ${found.length} gems. +${gained} ${icons[element]} energy.`;
+  next.energy[who] += energyGained;
+
+  next.movesLeft = Math.max(
+    0,
+    next.movesLeft - 1 + bonusMoves
+  );
+
+  const playerName = s.players[who].name;
+
+  next.last =
+    `${playerName} matched ${totalMatched} gems! ` +
+    `+${energyGained} ${icons[element]} energy.` +
+    (bonusMoves ? ' ⭐ FOUR MATCH! +1 MOVE!' : '') +
+    (cascades > 1 ? ` 🌟 ${cascades}x combo!` : '');
 
   if (next.energy[who] >= COST) {
     next.energy[who] -= COST;
 
-    const damage = 22 + (found.length >= 4 ? 7 : 0);
+    const damage = 22 + (firstMatch.cells.length >= 4 ? 7 : 0);
 
     next.hp[1 - who] = Math.max(
       0,
@@ -180,19 +285,29 @@ function updateMove(s, a, b, who) {
     next.attack = {
       from: who,
       damage,
-      nonce: next.round
+      nonce: (s.round || 1) + 1
     };
 
     const monster = MONSTERS[s.players[who].monster ?? 0];
 
-    next.last = `💥 ${monster.name} used ${monster.ability}! ${damage} damage!`;
+    next.last +=
+      ` 💥 ${monster.name} used ${monster.ability}! ` +
+      `${damage} damage!`;
   }
 
-  next.turn = 1 - who;
+  next.round = (s.round || 1) + 1;
 
   if (next.hp[1 - who] === 0) {
     next.winner = who;
-    next.last = `🏆 ${s.players[who].name} wins the battle!`;
+    next.movesLeft = 0;
+    next.last = `🏆 ${playerName} wins the battle!`;
+  } else if (next.movesLeft <= 0) {
+    next.turn = 1 - who;
+    next.movesLeft = 2;
+    next.last += ' Next player!';
+  } else {
+    next.turn = who;
+    next.last += ` ${next.movesLeft} move(s) remaining.`;
   }
 
   return next;
@@ -278,7 +393,9 @@ function render() {
         : '⏳ OPPONENT’S TURN'
     );
 
-  $('moves').textContent = `TURN ${state.round}`;
+  $('moves').textContent =
+    `ROUND ${state.round} · ${state.movesLeft ?? 2} MOVES LEFT`;
+
   $('log').textContent = state.last;
 
   const mine = MONSTERS[state.players[seat]?.monster ?? 0];
@@ -289,7 +406,7 @@ function render() {
     </span>
     <span>
       MATCH <b>${icons[mine.element]}
-      ${['RED', 'BLUE', 'YELLOW', 'PURPLE', 'GREEN'][mine.element]}</b> GEMS
+      ${colorNames[mine.element]}</b> GEMS
       <br>
       <small>Charge ${mine.ability} ·
       ${state.energy?.[seat] || 0}/${COST}</small>
@@ -366,8 +483,10 @@ function botMove() {
   const moves = [];
 
   for (let x = 0; x < 49; x++) {
-    for (const y of [x + 1, x + 7]) {
-      if (y >= 49 || (y === x + 1 && x % 7 === 6)) continue;
+    for (const y of [x + 1, x + SIZE]) {
+      if (y >= 49 || (y === x + 1 && x % SIZE === SIZE - 1)) {
+        continue;
+      }
 
       const b = [...state.board];
       [b[x], b[y]] = [b[y], b[x]];
@@ -390,8 +509,16 @@ function botMove() {
 
   if (moves.length) {
     const pick = moves[rand(Math.min(3, moves.length))];
-    state = updateMove(state, pick.x, pick.y, 1);
-    render();
+    const next = updateMove(state, pick.x, pick.y, 1);
+
+    if (next) {
+      state = next;
+      render();
+
+      if (state.winner === -1 && state.turn === 1) {
+        botTimer = setTimeout(botMove, 950);
+      }
+    }
   }
 }
 
@@ -419,7 +546,7 @@ async function tap(i) {
       state = n;
       render();
 
-      if (state.winner === -1) {
+      if (state.winner === -1 && state.turn === 1) {
         botTimer = setTimeout(botMove, 950);
       }
     } else {
@@ -548,8 +675,10 @@ $('create').onclick = async () => {
           hp: [100, 100],
           energy: [0, 0],
           turn: 0,
+          movesLeft: 2,
           round: 1,
           board: makeBoard(),
+          seed: Math.floor(Math.random() * 4294967295),
           winner: -1,
           last: 'Waiting for rival…',
           created: Date.now()
@@ -602,7 +731,7 @@ $('join').onclick = async () => {
       throw Error('This room has no host.');
     }
 
-    if (Date.now() - data.created > 86400000) {
+    if (Date.now() - data.created > ROOM_LIFETIME) {
       throw Error('Room expired. Create a new room.');
     }
 
