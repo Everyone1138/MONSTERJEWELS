@@ -510,6 +510,9 @@ function render() {
       '--monster',
       m.primary
     );
+    
+    $('art' + i).onclick = () => jiggleMonster(i);
+    
   }
 
   const movesRemaining =
