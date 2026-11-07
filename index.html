@@ -25,4 +25,38 @@ body{background:radial-gradient(ellipse at 50% 0%,#243e62 0%,#151d39 40%,#080e1d
 .monster-art.hit{animation:hit .65s ease-out!important}
 .three-note{font-size:11px;color:#aab8dd;text-align:center;margin:6px 0 10px}
 @media(max-width:380px){.monster-art{height:125px}}
+
+ 
+
+/* Tap-to-jiggle animation for 3D monsters */
+
+@keyframes monsterHappyJiggle {
+  0% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  20% {
+    transform: translateY(5px) rotate(-5deg) scale(1.08, .92);
+  }
+  40% {
+    transform: translateY(-12px) rotate(7deg) scale(.95, 1.08);
+  }
+  65% {
+    transform: translateY(-5px) rotate(-5deg) scale(1.04, .97);
+  }
+  100% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+}
+
+.monster-art.monster-jiggle {
+  animation: monsterHappyJiggle 650ms ease-out !important;
+}
+
+#art0, #art1 {
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+
 </style></head><body><main><div class="top"><div class="logo">⚡ MONSTER DUEL</div><span class="pill" id="network">LOCAL DEMO</span></div><section id="lobby" class="panel"><div class="badge">MATCH • BATTLE • WIN</div><h1>Little monsters.<br>Big battles.</h1><p>Challenge a friend to a fast-paced, two-player monster puzzle battle. Match your monster’s color to charge powerful attacks!</p><label for="nickname">YOUR NICKNAME</label><input id="nickname" placeholder="Monster trainer" maxlength="18" style="margin:8px 0 12px;text-transform:none"><h2 class="select-heading">CHOOSE YOUR MONSTER <span>10 fighters</span></h2><div id="roster" class="roster"></div><p id="chosen" class="chosen"></p><div class="row"><button class="btn" id="create">Create room</button><button class="btn secondary" id="demo">Play demo</button></div><div class="row" style="margin-top:13px"><input id="joincode" placeholder="ROOM CODE" maxlength="6"><button class="btn secondary" id="join">Join</button></div><div id="error"></div><p class="help">Online multiplayer needs your Firebase configuration in <code>config.js</code>. Demo mode works immediately, even offline.</p></section><section id="waiting" class="panel hidden"><h1>Waiting for rival…</h1><p>Share this room with one friend. The game starts automatically when they join.</p><div id="roomcode" class="roomcode"></div><button id="share" class="btn" style="width:100%">Copy invitation link</button><p class="help" id="waitinfo"></p></section><section id="game" class="hidden"><div class="status" id="turnstatus">Your turn</div><div class="arena"><div class="fighter" id="f0"><div class="avatar monster-art" id="art0"></div><div class="name" id="n0">Player 1</div><div class="health"><div id="h0"></div></div><div class="stats" id="s0"></div><div class="energy"><div id="energy0"></div></div><div class="charge" id="charge0"></div></div><div class="fighter" id="f1"><div class="avatar monster-art" id="art1"></div><div class="name" id="n1">Player 2</div><div class="health"><div id="h1"></div></div><div class="stats" id="s1"></div><div class="energy"><div id="energy1"></div></div><div class="charge" id="charge1"></div></div></div><div class="three-note" id="renderstatus">✨ Loading 3D monsters…</div><div id="target" class="target-guide"></div><div id="attackflash" class="attack-flash hidden"></div><div class="footer"><span>⚔️ Charge 9 gems to attack</span><span id="moves">TURN 1</span></div><div id="board" class="board"></div><div class="panel"><div id="log" class="log">Swap two neighboring gems to match three!</div><div class="row" style="margin-top:12px"><button id="restart" class="btn secondary">New demo</button><button id="leave" class="btn secondary">Leave room</button></div></div><div class="help">Tap one gem, then an adjacent gem to swap. Match your highlighted color to charge your monster. At 9 energy, it attacks automatically! Each valid match ends your turn.</div></section></main><script src="config.js"></script><script type="module" src="game.js"></script></body></html>
