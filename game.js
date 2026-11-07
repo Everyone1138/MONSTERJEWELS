@@ -74,6 +74,24 @@ function nextRandom(seed) {
   };
 }
 
+
+
+function jiggleMonster(playerIndex) {
+  const monster = $('art' + playerIndex);
+  if (!monster) return;
+
+  // Restart the animation on every tap.
+  monster.classList.remove('monster-jiggle');
+
+  void monster.offsetWidth;
+
+  monster.classList.add('monster-jiggle');
+}
+
+
+
+
+
 function scanMatches(board) {
   const cells = new Set();
   let longest = 0;
