@@ -1,50 +1,22 @@
 
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
-import {
-  getAuth,
-  signInAnonymously
-} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
-import {
-  getDatabase,
-  ref,
-  get,
-  onValue,
-  runTransaction
-} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js';
-
+import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+import { getDatabase, ref, get, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js';
 import { MONSTERS, monsterSVG } from './monsters.js';
 import { mountMonster, playMonsterAttack } from './three-monsters.js';
 
 const $ = id => document.getElementById(id);
-
 const icons = ['🔥', '💧', '⚡', '🔮', '🍀'];
 const colors = ['#ff6c63', '#5dcdf8', '#ffdc61', '#bb91ff', '#71e7a1'];
 const colorNames = ['RED', 'BLUE', 'YELLOW', 'PURPLE', 'GREEN'];
-
-const COST = 9;
-const SIZE = 7;
-const CELL_COUNT = SIZE * SIZE;
-const ROOM_LIFETIME = 86400000;
-const MOVES_PER_TURN = 2;
+const COST = 9, SIZE = 7, CELL_COUNT = 49, MOVES_PER_TURN = 2, ROOM_LIFETIME = 86400000;
 
 let db, auth, uid;
-let room = '';
-let seat = -1;
-let state = null;
-let unsubscribe = null;
-let selected = -1;
-let demo = false;
-let busy = false;
-let chosen = 0;
-let lastFx = '';
-let botTimer = null;
-let renderedMonsters = [-1, -1];
+let room = '', seat = -1, state = null, unsubscribe = null;
+let selected = -1, demo = false, busy = false, chosen = 0;
+let lastFx = '', botTimer = null, renderedMonsters = [-1, -1];
 
-const configured = !!(
-  window.FIREBASE_CONFIG?.apiKey &&
-  window.FIREBASE_CONFIG?.databaseURL
-);
-
+const configured = !!(window.FIREBASE_CONFIG?.apiKey && window.FIREBASE_CONFIG?.databaseURL);
 $('network').textContent = configured ? 'ONLINE READY' : 'LOCAL DEMO';
 
 function show(id) {
@@ -61,36 +33,10 @@ function rand(n) {
   return Math.floor(Math.random() * n);
 }
 
-// Deterministic random values keep refills stable
-// when Firebase retries a multiplayer transaction.
 function nextRandom(seed) {
-  const next = (
-    Math.imul(seed >>> 0, 1664525) + 1013904223
-  ) >>> 0;
-
-  return {
-    seed: next,
-    value: next % 5
-  };
+  const next = (Math.imul(seed >>> 0, 1664525) + 1013904223) >>> 0;
+  return { seed: next, value: next % 5 };
 }
-
-
-
-function jiggleMonster(playerIndex) {
-  const monster = $('art' + playerIndex);
-  if (!monster) return;
-
-  // Restart the animation on every tap.
-  monster.classList.remove('monster-jiggle');
-
-  void monster.offsetWidth;
-
-  monster.classList.add('monster-jiggle');
-}
-
-
-
-
 
 function scanMatches(board) {
   const cells = new Set();
@@ -99,34 +45,17 @@ function scanMatches(board) {
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
       const color = board[r * SIZE + c];
-
       if (color === null || color === undefined) continue;
 
       for (const [dr, dc] of [[0, 1], [1, 0]]) {
-        const previousR = r - dr;
-        const previousC = c - dc;
-
-        if (
-          previousR >= 0 &&
-          previousR < SIZE &&
-          previousC >= 0 &&
-          previousC < SIZE &&
-          board[previousR * SIZE + previousC] === color
-        ) {
-          continue;
-        }
+        const pr = r - dr, pc = c - dc;
+        if (pr >= 0 && pr < SIZE && pc >= 0 && pc < SIZE &&
+            board[pr * SIZE + pc] === color) continue;
 
         const run = [];
-        let rr = r;
-        let cc = c;
-
-        while (
-          rr >= 0 &&
-          rr < SIZE &&
-          cc >= 0 &&
-          cc < SIZE &&
-          board[rr * SIZE + cc] === color
-        ) {
+        let rr = r, cc = c;
+        while (rr >= 0 && rr < SIZE && cc >= 0 && cc < SIZE &&
+               board[rr * SIZE + cc] === color) {
           run.push(rr * SIZE + cc);
           rr += dr;
           cc += dc;
@@ -140,10 +69,7 @@ function scanMatches(board) {
     }
   }
 
-  return {
-    cells: [...cells],
-    longest
-  };
+  return { cells: [...cells], longest };
 }
 
 function matches(board) {
@@ -153,76 +79,64 @@ function matches(board) {
 function hasMove(board) {
   for (let i = 0; i < CELL_COUNT; i++) {
     for (const j of [i + 1, i + SIZE]) {
-      if (
-        j >= CELL_COUNT ||
-        (j === i + 1 && i % SIZE === SIZE - 1)
-      ) continue;
+      if (j >= CELL_COUNT ||
+          (j === i + 1 && i % SIZE === SIZE - 1)) continue;
 
       const copy = [...board];
       [copy[i], copy[j]] = [copy[j], copy[i]];
-
       if (matches(copy).length) return true;
     }
   }
-
   return false;
 }
 
 function makeBoard() {
   let board;
-
   do {
-    board = Array.from(
-      { length: CELL_COUNT },
-      () => rand(5)
-    );
+    board = Array.from({ length: CELL_COUNT }, () => rand(5));
   } while (matches(board).length || !hasMove(board));
-
   return board;
 }
 
-// Deterministic board reshuffle, used only if
-// there are no possible moves or cascades exceed
-// the safety limit.
 function makeSeededBoard(seed) {
-  let board;
-
   for (let attempt = 0; attempt < 10000; attempt++) {
-    board = [];
-
+    const board = [];
     for (let i = 0; i < CELL_COUNT; i++) {
-      const random = nextRandom(seed);
-      seed = random.seed;
-      board.push(random.value);
+      const n = nextRandom(seed);
+      seed = n.seed;
+      board.push(n.value);
     }
-
     if (!matches(board).length && hasMove(board)) {
       return { board, seed };
     }
   }
 
-  // Guaranteed fallback using a known playable pattern.
-  // Normally the seeded generator succeeds first.
-  const pattern = [];
+  const board = Array.from(
+    { length: CELL_COUNT },
+    (_, i) => (Math.floor(i / SIZE) * 2 + (i % SIZE) * 3) % 5
+  );
 
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
-      pattern.push((r * 2 + c * 3) % 5);
+  if (!matches(board).length && hasMove(board)) {
+    return { board, seed };
+  }
+
+  for (let shift = 0; shift < 1000; shift++) {
+    const candidate = Array.from(
+      { length: CELL_COUNT },
+      (_, i) => (
+        Math.floor(i / SIZE) * 2 +
+        (i % SIZE) * 3 +
+        ((i + shift) % 11 === 0 ? 1 : 0)
+      ) % 5
+    );
+    if (!matches(candidate).length && hasMove(candidate)) {
+      return { board: candidate, seed };
     }
   }
 
-  if (hasMove(pattern) && !matches(pattern).length) {
-    return { board: pattern, seed };
-  }
-
-  return {
-    board: makeBoard(),
-    seed
-  };
+  return { board, seed };
 }
 
-// Gravity: remove only matched gems.
-// Existing gems fall and new ones enter at the top.
 function applyGravity(board, removed, seed) {
   const empty = new Set(removed);
 
@@ -231,24 +145,19 @@ function applyGravity(board, removed, seed) {
 
     for (let row = SIZE - 1; row >= 0; row--) {
       const index = row * SIZE + col;
-
-      if (!empty.has(index)) {
-        remaining.push(board[index]);
-      }
+      if (!empty.has(index)) remaining.push(board[index]);
     }
 
     let row = SIZE - 1;
-
     for (const gem of remaining) {
       board[row * SIZE + col] = gem;
       row--;
     }
 
     while (row >= 0) {
-      const random = nextRandom(seed);
-      seed = random.seed;
-
-      board[row * SIZE + col] = random.value;
+      const n = nextRandom(seed);
+      seed = n.seed;
+      board[row * SIZE + col] = n.value;
       row--;
     }
   }
@@ -274,9 +183,6 @@ function initial(p1, p2) {
   };
 }
 
-// One valid swap consumes one move.
-// A match of 4+ in a straight line grants
-// one extra move to the current player.
 function updateMove(s, a, b, who) {
   if (
     s.winner !== -1 ||
@@ -284,18 +190,14 @@ function updateMove(s, a, b, who) {
     !s.players?.[1] ||
     !Number.isInteger(a) ||
     !Number.isInteger(b) ||
-    a < 0 ||
-    b < 0 ||
-    a >= CELL_COUNT ||
-    b >= CELL_COUNT
+    a < 0 || b < 0 ||
+    a >= CELL_COUNT || b >= CELL_COUNT
   ) return null;
 
   const adjacent =
     Math.abs(a - b) === SIZE ||
-    (
-      Math.abs(a - b) === 1 &&
-      Math.floor(a / SIZE) === Math.floor(b / SIZE)
-    );
+    (Math.abs(a - b) === 1 &&
+     Math.floor(a / SIZE) === Math.floor(b / SIZE));
 
   if (!adjacent) return null;
 
@@ -303,13 +205,9 @@ function updateMove(s, a, b, who) {
   [board[a], board[b]] = [board[b], board[a]];
 
   const firstMatch = scanMatches(board);
-
-  // Invalid swaps do not use a move.
   if (!firstMatch.cells.length) return null;
 
-  const element = MONSTERS[
-    s.players[who].monster ?? 0
-  ].element;
+  const element = MONSTERS[s.players[who].monster ?? 0].element;
 
   const next = {
     ...s,
@@ -321,12 +219,8 @@ function updateMove(s, a, b, who) {
     attack: null
   };
 
-  let totalMatched = 0;
-  let energyGained = 0;
-  let cascades = 0;
-
+  let totalMatched = 0, energyGained = 0, cascades = 0;
   const bonusMoves = firstMatch.longest >= 4 ? 1 : 0;
-
   let current = firstMatch;
 
   while (current.cells.length && cascades < 30) {
@@ -334,17 +228,10 @@ function updateMove(s, a, b, who) {
     totalMatched += current.cells.length;
 
     for (const index of current.cells) {
-      if (next.board[index] === element) {
-        energyGained++;
-      }
+      if (next.board[index] === element) energyGained++;
     }
 
-    next.seed = applyGravity(
-      next.board,
-      current.cells,
-      next.seed
-    );
-
+    next.seed = applyGravity(next.board, current.cells, next.seed);
     current = scanMatches(next.board);
   }
 
@@ -355,35 +242,21 @@ function updateMove(s, a, b, who) {
   }
 
   next.energy[who] += energyGained;
-
-  // Spend one move and award a bonus move, if earned.
-  next.movesLeft = Math.max(
-    0,
-    next.movesLeft - 1 + bonusMoves
-  );
+  next.movesLeft = Math.max(0, next.movesLeft - 1 + bonusMoves);
 
   const playerName = s.players[who].name;
-
   next.last =
-    `${playerName} matched ${totalMatched} gems! ` +
-    `+${energyGained} ${icons[element]} energy.` +
+    `${playerName} matched ${totalMatched} gems! +${energyGained} ${icons[element]} energy.` +
     (bonusMoves ? ' ⭐ FOUR MATCH! +1 MOVE!' : '') +
     (cascades > 1 ? ` 🌟 ${cascades}x combo!` : '');
 
   next.moveNumber = (s.moveNumber ?? 0) + 1;
 
-  // Monster attacks automatically at 9 energy.
   if (next.energy[who] >= COST) {
     next.energy[who] -= COST;
 
-    const damage = 22 + (
-      firstMatch.cells.length >= 4 ? 7 : 0
-    );
-
-    next.hp[1 - who] = Math.max(
-      0,
-      next.hp[1 - who] - damage
-    );
+    const damage = 22 + (firstMatch.cells.length >= 4 ? 7 : 0);
+    next.hp[1 - who] = Math.max(0, next.hp[1 - who] - damage);
 
     next.attack = {
       from: who,
@@ -391,35 +264,24 @@ function updateMove(s, a, b, who) {
       nonce: next.moveNumber
     };
 
-    const monster = MONSTERS[
-      s.players[who].monster ?? 0
-    ];
-
-    next.last +=
-      ` 💥 ${monster.name} used ${monster.ability}! ` +
-      `${damage} damage!`;
+    const monster = MONSTERS[s.players[who].monster ?? 0];
+    next.last += ` 💥 ${monster.name} used ${monster.ability}! ${damage} damage!`;
   }
 
   if (next.hp[1 - who] === 0) {
     next.winner = who;
     next.movesLeft = 0;
     next.last = `🏆 ${playerName} wins the battle!`;
-
   } else if (next.movesLeft <= 0) {
-    // Player 1 finishes two moves -> Player 2.
-    // Player 2 finishes two moves -> Player 1.
     next.turn = 1 - who;
     next.movesLeft = MOVES_PER_TURN;
 
-    // Only increment the round after Player 2.
     if (who === 1) {
       next.round = (s.round ?? 1) + 1;
     }
 
     next.last += ' Next player!';
-
   } else {
-    // Same player still has moves remaining.
     next.turn = who;
     next.last += ` ${next.movesLeft} move(s) remaining.`;
   }
@@ -433,16 +295,11 @@ function drawPicker() {
 
   MONSTERS.forEach((m, i) => {
     const b = document.createElement('button');
-
-    b.className =
-      'monster-choice' + (chosen === i ? ' picked' : '');
-
+    b.className = 'monster-choice' + (chosen === i ? ' picked' : '');
     b.style.setProperty('--monster', m.primary);
 
     b.innerHTML = `
-      <div class="mini-monster">
-        ${monsterSVG(i, 'pick' + i)}
-      </div>
+      <div class="mini-monster">${monsterSVG(i, 'pick' + i)}</div>
       <strong>${m.name}</strong>
       <small>${icons[m.element]} ${m.ability}</small>
     `;
@@ -456,31 +313,38 @@ function drawPicker() {
   });
 
   const m = MONSTERS[chosen];
-
   $('chosen').textContent =
     `Selected: ${m.name} · ${icons[m.element]} ${m.ability}`;
 }
 
-
-
+// Jiggle the existing monster container.
+// Do not replace the Three.js canvas.
 function jiggleMonster(playerIndex) {
-  const monster = $('art' + playerIndex);
-  if (!monster) return;
+  const el = $('art' + playerIndex);
+  if (!el) return;
 
-  monster.classList.remove('monster-jiggle');
-  void monster.offsetWidth;
-  monster.classList.add('monster-jiggle');
+  el.classList.remove('monster-jiggle');
+  void el.offsetWidth;
+  el.classList.add('monster-jiggle');
 }
 
-$('art0').addEventListener('click', () => jiggleMonster(0));
-$('art1').addEventListener('click', () => jiggleMonster(1));
+function setupMonsterTaps() {
+  for (let i = 0; i < 2; i++) {
+    const el = $('art' + i);
+    if (!el) continue;
 
+    el.addEventListener('click', () => jiggleMonster(i));
 
-
+    el.addEventListener('animationend', e => {
+      if (e.animationName === 'monsterHappyJiggle') {
+        el.classList.remove('monster-jiggle');
+      }
+    });
+  }
+}
 
 function render() {
   if (!state || !state.players?.[1]) return;
-
   show('game');
 
   for (let i = 0; i < 2; i++) {
@@ -500,78 +364,49 @@ function render() {
     if (renderedMonsters[i] !== monsterIndex) {
       renderedMonsters[i] = monsterIndex;
 
-      mountMonster($('art' + i), monsterIndex, i)
-        .catch(() => {
-          $('art' + i).classList.add('fallback');
-
-          $('art' + i).innerHTML = monsterSVG(
-            monsterIndex,
-            'arena' + i
-          );
-
-          $('renderstatus').textContent =
-            '2D fallback active';
+      Promise.resolve()
+        .then(() => mountMonster($('art' + i), monsterIndex, i))
+        .catch(e => {
+          console.warn('3D monster unavailable; using 2D fallback:', e);
+          const el = $('art' + i);
+          el.classList.add('fallback');
+          el.innerHTML = monsterSVG(monsterIndex, 'arena' + i);
+          $('renderstatus').textContent = '2D fallback active';
         });
     }
 
     $('energy' + i).style.width =
-      Math.min(
-        100,
-        (state.energy?.[i] || 0) / COST * 100
-      ) + '%';
+      Math.min(100, (state.energy?.[i] || 0) / COST * 100) + '%';
 
     $('charge' + i).textContent =
       `${icons[m.element]} ${state.energy?.[i] || 0}/${COST}`;
 
-    $('f' + i).style.setProperty(
-      '--monster',
-      m.primary
-    );
-    
-    $('art' + i).onclick = () => jiggleMonster(i);
-    
+    $('f' + i).style.setProperty('--monster', m.primary);
   }
 
-  const movesRemaining =
-    state.movesLeft ?? MOVES_PER_TURN;
+  const movesRemaining = state.movesLeft ?? MOVES_PER_TURN;
 
-  $('turnstatus').textContent =
-    state.winner >= 0
-      ? (
-        state.winner === seat
-          ? '🏆 YOU WON!'
-          : '💀 YOUR RIVAL WON!'
-      )
-      : (
-        state.turn === seat
-          ? `✨ YOUR TURN — ${movesRemaining} MOVE(S) LEFT`
-          : `⏳ OPPONENT'S TURN — ${movesRemaining} MOVE(S) LEFT`
-      );
+  $('turnstatus').textContent = state.winner >= 0
+    ? (state.winner === seat ? '🏆 YOU WON!' : '💀 YOUR RIVAL WON!')
+    : (state.turn === seat
+        ? `✨ YOUR TURN — ${movesRemaining} MOVE(S) LEFT`
+        : `⏳ OPPONENT'S TURN — ${movesRemaining} MOVE(S) LEFT`);
 
   $('moves').textContent =
     `ROUND ${state.round} · ${movesRemaining} MOVES LEFT`;
 
   $('log').textContent = state.last;
 
-  const mine = MONSTERS[
-    state.players[seat]?.monster ?? 0
-  ];
+  const mine = MONSTERS[state.players[seat]?.monster ?? 0];
 
   $('target').innerHTML = `
-    <span class="target-dot"
-          style="background:${colors[mine.element]}">
+    <span class="target-dot" style="background:${colors[mine.element]}">
       ${icons[mine.element]}
     </span>
     <span>
-      MATCH <b>
-        ${icons[mine.element]}
-        ${colorNames[mine.element]}
-      </b> GEMS
+      MATCH <b>${icons[mine.element]} ${colorNames[mine.element]}</b> GEMS
       <br>
-      <small>
-        Charge ${mine.ability} ·
-        ${state.energy?.[seat] || 0}/${COST}
-      </small>
+      <small>Charge ${mine.ability} · ${state.energy?.[seat] || 0}/${COST}</small>
     </span>
   `;
 
@@ -588,11 +423,7 @@ function render() {
 
     t.dataset.t = v;
     t.textContent = icons[v];
-
-    t.setAttribute(
-      'aria-label',
-      `Gem ${i + 1}: ${icons[v]}`
-    );
+    t.setAttribute('aria-label', `Gem ${i + 1}: ${icons[v]}`);
 
     t.disabled =
       state.winner !== -1 ||
@@ -606,7 +437,6 @@ function render() {
   $('restart').classList.toggle('hidden', !demo);
 
   const fx = state.attack;
-
   if (fx && lastFx !== `${room}:${fx.nonce}`) {
     lastFx = `${room}:${fx.nonce}`;
     animateAttack(fx);
@@ -623,43 +453,33 @@ function animateAttack(fx) {
   defender.classList.remove('hit');
 
   void attacker.offsetWidth;
-
   attacker.classList.add('striking');
 
   setTimeout(() => {
     defender.classList.add('hit');
 
     const flash = $('attackflash');
-
     flash.textContent = `⚔️ −${fx.damage} HP`;
     flash.classList.remove('hidden', 'blast');
 
     void flash.offsetWidth;
-
     flash.classList.add('blast');
 
-    setTimeout(() => {
-      flash.classList.add('hidden');
-    }, 950);
+    setTimeout(() => flash.classList.add('hidden'), 950);
   }, 300);
 }
 
 function botMove() {
-  if (
-    !demo ||
-    !state ||
-    state.winner !== -1 ||
-    state.turn !== 1
-  ) return;
+  if (!demo || !state || state.winner !== -1 || state.turn !== 1) {
+    return;
+  }
 
   const moves = [];
 
   for (let x = 0; x < CELL_COUNT; x++) {
     for (const y of [x + 1, x + SIZE]) {
-      if (
-        y >= CELL_COUNT ||
-        (y === x + 1 && x % SIZE === SIZE - 1)
-      ) continue;
+      if (y >= CELL_COUNT ||
+          (y === x + 1 && x % SIZE === SIZE - 1)) continue;
 
       const b = [...state.board];
       [b[x], b[y]] = [b[y], b[x]];
@@ -671,9 +491,7 @@ function botMove() {
           x,
           y,
           score: found.filter(
-            i => b[i] === MONSTERS[
-              state.players[1].monster
-            ].element
+            i => b[i] === MONSTERS[state.players[1].monster].element
           ).length * 10 + found.length
         });
       }
@@ -683,26 +501,14 @@ function botMove() {
   moves.sort((a, b) => b.score - a.score);
 
   if (moves.length) {
-    const pick = moves[
-      rand(Math.min(3, moves.length))
-    ];
-
-    const next = updateMove(
-      state,
-      pick.x,
-      pick.y,
-      1
-    );
+    const pick = moves[rand(Math.min(3, moves.length))];
+    const next = updateMove(state, pick.x, pick.y, 1);
 
     if (next) {
       state = next;
       render();
 
-      // CPU uses both regular moves and any bonus moves.
-      if (
-        state.winner === -1 &&
-        state.turn === 1
-      ) {
+      if (state.winner === -1 && state.turn === 1) {
         botTimer = setTimeout(botMove, 950);
       }
     }
@@ -710,12 +516,8 @@ function botMove() {
 }
 
 async function tap(i) {
-  if (
-    busy ||
-    !state ||
-    state.turn !== seat ||
-    state.winner !== -1
-  ) return;
+  if (busy || !state || state.turn !== seat ||
+      state.winner !== -1) return;
 
   if (selected === -1) {
     selected = i;
@@ -732,27 +534,18 @@ async function tap(i) {
   }
 
   if (demo) {
-    const next = updateMove(
-      state,
-      a,
-      i,
-      0
-    );
+    const next = updateMove(state, a, i, 0);
 
     if (next) {
       state = next;
       render();
 
-      if (
-        state.winner === -1 &&
-        state.turn === 1
-      ) {
+      if (state.winner === -1 && state.turn === 1) {
         botTimer = setTimeout(botMove, 950);
       }
     } else {
       render();
     }
-
     return;
   }
 
@@ -762,11 +555,9 @@ async function tap(i) {
     const result = await runTransaction(
       ref(db, 'rooms/' + room),
       s => {
-        if (
-          !s ||
-          s.players?.[seat]?.uid !== uid ||
-          !s.players?.[1]
-        ) return;
+        if (!s ||
+            s.players?.[seat]?.uid !== uid ||
+            !s.players?.[1]) return;
 
         return updateMove(s, a, i, seat) || undefined;
       },
@@ -776,11 +567,9 @@ async function tap(i) {
     if (!result.committed) {
       console.info('Move was not committed.');
     }
-
   } catch (e) {
     console.error('Move failed:', e);
     alert(e.message);
-
   } finally {
     busy = false;
     render();
@@ -788,24 +577,16 @@ async function tap(i) {
 }
 
 function name() {
-  return (
-    $('nickname').value.trim().slice(0, 18) ||
-    'Trainer'
-  );
+  return $('nickname').value.trim().slice(0, 18) || 'Trainer';
 }
 
 async function connect() {
   if (!configured) {
-    throw Error(
-      'Add Firebase configuration to config.js.'
-    );
+    throw Error('Add Firebase configuration to config.js.');
   }
 
   if (!db) {
-    const app = initializeApp(
-      window.FIREBASE_CONFIG
-    );
-
+    const app = initializeApp(window.FIREBASE_CONFIG);
     db = getDatabase(app);
     auth = getAuth(app);
   }
@@ -833,17 +614,10 @@ function watch(code) {
       }
 
       state = s;
-
-      seat =
-        s.players?.findIndex(
-          p => p?.uid === uid
-        ) ?? -1;
+      seat = s.players?.findIndex(p => p?.uid === uid) ?? -1;
 
       if (seat < 0) {
-        alert(
-          'You are not registered in this room.'
-        );
-
+        alert('You are not registered in this room.');
         leave();
         return;
       }
@@ -852,28 +626,19 @@ function watch(code) {
         render();
       } else {
         show('waiting');
-
         $('roomcode').textContent = code;
-
-        $('waitinfo').textContent =
-          'Waiting for player two…';
+        $('waitinfo').textContent = 'Waiting for player two…';
       }
     },
     e => {
-      console.error(
-        'Room listener failed:',
-        e
-      );
-
+      console.error('Room listener failed:', e);
       alert(e.message);
     }
   );
 }
 
 function roomCode() {
-  const alphabet =
-    'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   return Array.from(
     { length: 6 },
     () => alphabet[rand(alphabet.length)]
@@ -886,26 +651,15 @@ $('create').onclick = async () => {
     $('error').textContent = '';
     await connect();
 
-    let code;
-    let done = false;
+    let code, done = false;
 
-    for (
-      let tries = 0;
-      tries < 8 && !done;
-      tries++
-    ) {
+    for (let tries = 0; tries < 8 && !done; tries++) {
       code = roomCode();
 
       const result = await runTransaction(
         ref(db, 'rooms/' + code),
         s => s === null ? {
-          players: [
-            {
-              uid,
-              name: name(),
-              monster: chosen
-            }
-          ],
+          players: [{ uid, name: name(), monster: chosen }],
           hp: [100, 100],
           energy: [0, 0],
           turn: 0,
@@ -913,9 +667,7 @@ $('create').onclick = async () => {
           round: 1,
           moveNumber: 0,
           board: makeBoard(),
-          seed: Math.floor(
-            Math.random() * 4294967295
-          ),
+          seed: Math.floor(Math.random() * 4294967295),
           winner: -1,
           last: 'Waiting for rival…',
           created: Date.now()
@@ -927,25 +679,17 @@ $('create').onclick = async () => {
     }
 
     if (!done) {
-      throw Error(
-        'Could not create a room. Try again.'
-      );
+      throw Error('Could not create a room. Try again.');
     }
 
     history.replaceState(
-      null,
-      '',
+      null, '',
       location.pathname + '?room=' + code
     );
 
     watch(code);
-
   } catch (e) {
-    console.error(
-      'Create room failed:',
-      e
-    );
-
+    console.error('Create room failed:', e);
     error(e);
   }
 };
@@ -956,69 +700,44 @@ $('join').onclick = async () => {
     $('error').textContent = '';
     await connect();
 
-    const code = $('joincode')
-      .value
-      .trim()
-      .toUpperCase();
+    const code = $('joincode').value.trim().toUpperCase();
 
     if (!/^[A-Z2-9]{6}$/.test(code)) {
-      throw Error(
-        'Enter a valid six-character room code.'
-      );
+      throw Error('Enter a valid six-character room code.');
     }
 
-    const roomRef = ref(
-      db,
-      'rooms/' + code
-    );
-
-    const snapshot = await get(roomRef);
+    const snapshot = await get(ref(db, 'rooms/' + code));
 
     if (!snapshot.exists()) {
-      throw Error(
-        'Room not found. Ask the host for a new code.'
-      );
+      throw Error('Room not found. Ask the host for a new code.');
     }
 
     const data = snapshot.val();
 
     if (!data.players?.[0]?.uid) {
-      throw Error(
-        'This room has no host.'
-      );
+      throw Error('This room has no host.');
     }
 
-    if (
-      Date.now() - data.created >
-      ROOM_LIFETIME
-    ) {
-      throw Error(
-        'Room expired. Create a new room.'
-      );
+    if (Date.now() - data.created > ROOM_LIFETIME) {
+      throw Error('Room expired. Create a new room.');
     }
 
-    const existingSeat =
-      data.players.findIndex(
-        p => p?.uid === uid
-      );
+    const existingSeat = data.players.findIndex(
+      p => p?.uid === uid
+    );
 
     if (existingSeat >= 0) {
       seat = existingSeat;
-
       history.replaceState(
-        null,
-        '',
+        null, '',
         location.pathname + '?room=' + code
       );
-
       watch(code);
       return;
     }
 
     if (data.players[1]) {
-      throw Error(
-        'This room already has two players.'
-      );
+      throw Error('This room already has two players.');
     }
 
     const playerRef = ref(
@@ -1035,14 +754,8 @@ $('join').onclick = async () => {
     const result = await runTransaction(
       playerRef,
       current => {
-        if (current === null) {
-          return newPlayer;
-        }
-
-        if (current.uid === uid) {
-          return current;
-        }
-
+        if (current === null) return newPlayer;
+        if (current.uid === uid) return current;
         return;
       },
       { applyLocally: false }
@@ -1054,39 +767,24 @@ $('join').onclick = async () => {
       );
     }
 
-    const joinedPlayer =
-      result.snapshot.val();
-
-    if (joinedPlayer?.uid !== uid) {
-      throw Error(
-        'Player identity verification failed.'
-      );
+    if (result.snapshot.val()?.uid !== uid) {
+      throw Error('Player identity verification failed.');
     }
 
     seat = 1;
 
     history.replaceState(
-      null,
-      '',
+      null, '',
       location.pathname + '?room=' + code
     );
 
     watch(code);
-
   } catch (e) {
-    console.error(
-      'JOIN ERROR:',
-      e.code,
-      e.message
-    );
+    console.error('JOIN ERROR:', e.code, e.message);
 
-    if (
-      e.code === 'PERMISSION_DENIED' ||
-      e.code === 'database/permission-denied'
-    ) {
-      error(
-        'Firebase denied the join. Check database security rules.'
-      );
+    if (e.code === 'PERMISSION_DENIED' ||
+        e.code === 'database/permission-denied') {
+      error('Firebase denied the join. Check database security rules.');
     } else {
       error(e);
     }
@@ -1100,27 +798,19 @@ $('demo').onclick = () => {
   seat = 0;
 
   state = initial(
-    {
-      name: name(),
-      monster: chosen
-    },
+    { name: name(), monster: chosen },
     {
       name: 'CPU Rival',
-      monster: (
-        chosen + 1 + rand(9)
-      ) % 10
+      monster: (chosen + 1 + rand(9)) % 10
     }
   );
 
   selected = -1;
   lastFx = '';
-
   render();
 };
 
-$('restart').onclick = () => {
-  $('demo').click();
-};
+$('restart').onclick = () => $('demo').click();
 
 function leave() {
   renderedMonsters = [-1, -1];
@@ -1130,9 +820,7 @@ function leave() {
     botTimer = null;
   }
 
-  if (unsubscribe) {
-    unsubscribe();
-  }
+  if (unsubscribe) unsubscribe();
 
   unsubscribe = null;
   state = null;
@@ -1142,12 +830,7 @@ function leave() {
   selected = -1;
   busy = false;
 
-  history.replaceState(
-    null,
-    '',
-    location.pathname
-  );
-
+  history.replaceState(null, '', location.pathname);
   show('lobby');
 }
 
@@ -1156,39 +839,24 @@ $('leave').onclick = leave;
 // COPY INVITATION LINK
 $('share').onclick = async () => {
   const url = new URL(location.href);
-
-  url.searchParams.set(
-    'room',
-    room
-  );
+  url.searchParams.set('room', room);
 
   try {
-    await navigator.clipboard.writeText(
-      url.href
-    );
-
-    $('share').textContent =
-      '✓ Link copied!';
-
+    await navigator.clipboard.writeText(url.href);
+    $('share').textContent = '✓ Link copied!';
   } catch {
-    prompt(
-      'Copy this invitation link:',
-      url.href
-    );
+    prompt('Copy this invitation link:', url.href);
   }
 };
 
 // DETECT INVITATION LINK
-const invited = new URLSearchParams(
-  location.search
-).get('room');
+const invited = new URLSearchParams(location.search).get('room');
 
 if (invited) {
-  $('joincode').value =
-    invited.toUpperCase();
-
+  $('joincode').value = invited.toUpperCase();
   $('error').textContent =
     'Invitation detected! Pick a monster, enter your nickname and tap Join.';
 }
 
+setupMonsterTaps();
 drawPicker();
