@@ -461,6 +461,23 @@ function drawPicker() {
     `Selected: ${m.name} · ${icons[m.element]} ${m.ability}`;
 }
 
+
+
+function jiggleMonster(playerIndex) {
+  const monster = $('art' + playerIndex);
+  if (!monster) return;
+
+  monster.classList.remove('monster-jiggle');
+  void monster.offsetWidth;
+  monster.classList.add('monster-jiggle');
+}
+
+$('art0').addEventListener('click', () => jiggleMonster(0));
+$('art1').addEventListener('click', () => jiggleMonster(1));
+
+
+
+
 function render() {
   if (!state || !state.players?.[1]) return;
 
